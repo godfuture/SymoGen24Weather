@@ -3,12 +3,25 @@ from pyModbusTCP import utils
 
 
 class SymoGen24:
-    def __init__(self, ipaddr, port):
-        self.modbus = ModbusClient(host=ipaddr, port=port, auto_open=True, auto_close=True)
-        # self.modbus.debug(True)
-
-        # Format:
-        # "name : [register address, data type, unit 1]
+    # Format:
+    # "name : [register address, data type, unit 1]
+    
+    def __init__(self, ipaddr, port, auto=True):
+        if (auto):
+            self.modbus = ModbusClient(host=ipaddr, port=port, auto_open=True, auto_close=True)
+            self.modbus.unit_id(1)
+            # self.modbus.debug(True)
+        else:
+            self.modbus = ModbusClient()
+            self.modbus.host(ipaddr)
+            self.modbus.port(port)
+            self.modbus.unit_id(1)
+            self.modbus.open()
+        
+        sunspecid = self.read_uint16(40070)
+        if sunspecid != 113:
+            print("Warning: Invalid SunspecID, wrong device ?")
+        
         self.registers = {
         # Common Block Register   
             "SunspecSID" : [40001, "uint32", 1],
@@ -32,6 +45,8 @@ class SymoGen24:
             "Battery_SunspecID" : [40314, "uint16", 1],
             "Battery_SoC" : [40322, "uint16", 1],
             "Battery_Status" : [40325, "uint16", 1],
+            "MaxChaRte" : [40155, "uint16", 1],
+            "MaxDisChaRte" : [40157, "uint16", 1],
         # Multiple MPPT
             "MPPT_SunspecID" : [40264, "uint16", 1],
             "MPPT_Current_Scale_Factor" : [40266, "uint16", 1],
@@ -55,12 +70,7 @@ class SymoGen24:
             "Meter_Power_L2" : [40102, "float", 200],
             "Meter_Power_L3" : [40104, "float", 200],
         }
-                   
-        self.modbus.unit_id(1)
-        sunspecid = self.read_uint16(40070)
-        if sunspecid != 113:
-            print("Warning: Invalid SunspecID, wrong device ?")
-                                      
+         
     def read_uint16(self, addr):
         regs = self.modbus.read_holding_registers(addr-1, 1)
         if regs:
