@@ -1,7 +1,7 @@
 import pickledb
 import json
 import configparser
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 import SymoGen24Connector
 
@@ -13,43 +13,66 @@ def loadConfig():
 		print('config file not found.')
 		exit()
 	return config
-	
-def getWeatherData(config):
-	with open(config['env']['filePathWeatherData']) as json_file:
-		data = json.load(json_file)
-	return data
 
+def setDbValue(db, name, value):
+	valueOld = db.get(name)
+	if (valueOld != value):
+		db.set(name, value)
+	
 def storeSettingsToDb(db):
 	latestBatteryMaxPower = db.get('latestBatteryMaxPower')
 	db.set('latestBatteryMaxPower', 'value')
 	db.dump()
 
-def analyseWeather(data):
-    timezone = data['timezone']
-    sunrise = datetime.fromtimestamp(data['current'][1]['sunrise'], pytz.timezone(timezone))
-    sunset = datetime.fromtimestamp(data['current'][1]['sunset'], pytz.timezone(timezone))
-    # hoursOfSunlight	= divmod(sunset - sunrise, 3600)[0]
-	# hoursOfSunlightLeft = 
-	
-    for hour in data['hourly']:
-        #weather = data['daily'][1]['weather'][0]['description']
-        clouds = hour['clouds']
-        dateTime = datetime.fromtimestamp(hour['dt'], pytz.timezone(timezone))
-        print(f'Clouds: {clouds} at {dateTime}')
-	
 if __name__ == '__main__':
 	config = loadConfig()
-	db = pickledb.load(config['env']['filePathConfigDb'], False)
-	gen24 = SymoGen24Connector.SymoGen24(config['gen24']['hostNameOrIp'], port=config['gen24']['port'], auto=False)
-	data = getWeatherData(config)
-	#if (data):
-		#analyseWeather(data)
+	db = pickledb.load(config['env']['filePathConfigDb'], True)
 	
-	try:
-	    gen24.print_all()
-	    print('Energy To Battery in W (scaled, charging): ' + str(gen24.read_uint16(40325)))
-	    print('Energy From Battery in W (scaled, discharging): ' + str(gen24.read_uint16(40345)))
-	    print('Get combined MPPT Power: ' + str(gen24.get_mppt_power()))
-	except:
-	    gen24.close()
+	#now = datetime.now(pytz.timezone(config['env']['timezone']))
+	now = datetime.now()
+	format = "%Y-%m-%d %H:%M:%S"
 	
+	gen24 = None
+	auto = False
+	try:		
+		chargeStart = None
+		if (db.get('ChargeStart')):
+			chargeStart = datetime.strptime(db.get('ChargeStart'), format)
+			print(f'Current chargeStart loaded from db: {chargeStart}')
+		
+		newPercent = None
+		chargeIsPaused = db.get('chargeIsPaused')
+		print(f'Is charge currently paused (0=no,1=yes,False=NotSet)? {chargeIsPaused}')
+		if (chargeStart):
+			if (now < chargeStart):
+				if (chargeIsPaused == 0 or not chargeIsPaused):
+					newPercent = 0
+			else:
+				if (chargeIsPaused == 1):
+					newPercent = 10000
+		elif (chargeIsPaused == 1):
+			newPercent = 10000
+			
+		if (newPercent is not None):
+			gen24 = SymoGen24Connector.SymoGen24(config['gen24']['hostNameOrIp'], config['gen24']['port'], auto)
+			valueOld = gen24.read_data('BatteryMaxChargePercent')			
+			if (newPercent == 0):				
+				valueNew = gen24.write_data('BatteryMaxChargePercent', newPercent)
+				if (valueNew):
+					db.set('chargeIsPaused', 1)
+			elif (newPercent == 10000):
+				valueNew = gen24.write_data('BatteryMaxChargePercent', newPercent)
+				if (valueNew):
+					db.set('chargeIsPaused', 0)
+			print(f'Changed maxChargePercentage from: {valueOld} to {newPercent}.')
+			dataBatteryStats = gen24.read_section('StorageDevice')
+			if (dataBatteryStats):
+				#gen24.print_all()
+				print(f'Battery Stats: {dataBatteryStats}')
+				#print(f'Sunlight Weather: {dataWeatherSunlight}')
+		gen24 = SymoGen24Connector.SymoGen24(config['gen24']['hostNameOrIp'], config['gen24']['port'], auto)
+		dataBatteryStats = gen24.read_section('StorageDevice')
+		print(f'Battery Stats: {dataBatteryStats}')
+	finally:
+		if (gen24 and not auto):
+			gen24.modbus.close()
